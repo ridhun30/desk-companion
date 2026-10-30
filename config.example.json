@@ -1,5 +1,4 @@
 {
-  "ics_urls": [
-    "https://outlook.office365.com/owa/calendar/xxxxxxxx@example.com/yyyyyyyy/calendar.ics"
-  ]
+  "microsoft": { "client_id": "", "tenant": "" },
+  "ics_urls": []
 }

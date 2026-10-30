@@ -1,3 +1,4 @@
 config.json
+.ms-token.json
 __pycache__/
 *.log

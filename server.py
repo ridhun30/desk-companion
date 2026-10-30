@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Desk Companion server.
 
-Serves the web app from ./public and exposes /api/agenda, which turns one or
-more published Outlook calendars (ICS links) into a JSON list of events.
-Browsers can't fetch Outlook ICS links directly (no CORS headers), and
-recurring events need expanding, so both happen here.
+Serves the web app from ./public and exposes /api/agenda, which merges
+Microsoft 365 (via Graph, see microsoft.py) and published ICS calendars into a
+JSON list of events. Browsers can't fetch Outlook ICS links directly (no CORS
+headers), and recurring events need expanding, so both happen here.
 """
 import argparse
 import json
@@ -19,6 +19,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from microsoft import MicrosoftCalendar, NotSignedIn
+
 try:
     import icalendar
     import recurring_ical_events
@@ -28,20 +30,35 @@ except ImportError:  # the app still runs; only the agenda needs these
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 CONFIG_PATH = Path(os.environ.get("DESK_CONFIG", ROOT / "config.json"))
+TOKEN_PATH = ROOT / ".ms-token.json"
 CACHE_SECONDS = 600
 MAX_RANGE = timedelta(days=14)
 
 _cache = {}  # url -> (fetched_at, icalendar.Calendar)
 _cache_lock = threading.Lock()
+_microsoft = None
 
 
-def load_ics_urls():
-    """Read ICS links from config.json and/or the OUTLOOK_ICS_URL env var."""
-    urls = []
-    if CONFIG_PATH.exists():
-        urls += json.loads(CONFIG_PATH.read_text()).get("ics_urls", [])
+def load_config():
+    return json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
+
+
+def load_ics_urls(config):
+    """ICS links from config.json and/or the OUTLOOK_ICS_URL env var."""
+    urls = list(config.get("ics_urls", []))
     urls += [u.strip() for u in os.environ.get("OUTLOOK_ICS_URL", "").split(",") if u.strip()]
     return [("https://" + u[len("webcal://"):]) if u.startswith("webcal://") else u for u in urls]
+
+
+def microsoft_calendar(config):
+    """The MicrosoftCalendar for config["microsoft"], or None if not set up."""
+    global _microsoft
+    ms = config.get("microsoft") or {}
+    if not ms.get("client_id"):
+        return None
+    if _microsoft is None or _microsoft.client_id != ms["client_id"]:
+        _microsoft = MicrosoftCalendar(ms["client_id"], ms.get("tenant"), TOKEN_PATH)
+    return _microsoft
 
 
 def get_calendar(url):
@@ -72,44 +89,63 @@ def serialize_time(value, floating_tz):
     return value.isoformat(), True
 
 
+def ics_events(url, start, end):
+    """Return (events, stale) for one ICS feed."""
+    if icalendar is None:
+        raise RuntimeError("calendar libraries missing: pip install -r requirements.txt")
+    cal, stale = get_calendar(url)
+    events = []
+    for ev in recurring_ical_events.of(cal).between(start, end):
+        if str(ev.get("STATUS", "")).upper() == "CANCELLED":
+            continue
+        dtstart = ev.decoded("DTSTART")
+        if "DTEND" in ev:
+            dtend = ev.decoded("DTEND")
+        elif "DURATION" in ev:
+            dtend = dtstart + ev.decoded("DURATION")
+        else:
+            dtend = dtstart if isinstance(dtstart, datetime) else dtstart + timedelta(days=1)
+
+        start_s, all_day = serialize_time(dtstart, start.tzinfo)
+        end_s, _ = serialize_time(dtend, start.tzinfo)
+        events.append({
+            "title": str(ev.get("SUMMARY", "")).strip() or "(No title)",
+            "location": str(ev.get("LOCATION", "")).strip() or None,
+            "start": start_s,
+            "end": end_s,
+            "allDay": all_day,
+        })
+    return events, stale
+
+
 def build_agenda(start, end):
-    urls = load_ics_urls()
-    if not urls:
+    config = load_config()
+    sources = []  # (label, fetch) pairs
+    ms = microsoft_calendar(config)
+    if ms:
+        sources.append(("Microsoft 365", ms.events))
+    for url in load_ics_urls(config):
+        sources.append((urlparse(url).hostname or "calendar", lambda s, e, url=url: ics_events(url, s, e)))
+    if not sources:
         return {"configured": False, "events": []}
 
     events, errors, stale, seen = [], [], False, set()
-    for url in urls:
+    for label, fetch in sources:
         try:
-            cal, was_stale = get_calendar(url)
-        except Exception as exc:
-            errors.append(f"{urlparse(url).hostname}: {exc}")
+            source_events, source_stale = fetch(start, end)
+        except NotSignedIn as exc:
+            errors.append(str(exc))
             continue
-        stale = stale or was_stale
-        for ev in recurring_ical_events.of(cal).between(start, end):
-            if str(ev.get("STATUS", "")).upper() == "CANCELLED":
-                continue
-            dtstart = ev.decoded("DTSTART")
-            if "DTEND" in ev:
-                dtend = ev.decoded("DTEND")
-            elif "DURATION" in ev:
-                dtend = dtstart + ev.decoded("DURATION")
-            else:
-                dtend = dtstart if isinstance(dtstart, datetime) else dtstart + timedelta(days=1)
-
-            start_s, all_day = serialize_time(dtstart, start.tzinfo)
-            end_s, _ = serialize_time(dtend, start.tzinfo)
-            title = str(ev.get("SUMMARY", "")).strip() or "(No title)"
-            key = (title, start_s, end_s)
-            if key in seen:
-                continue
-            seen.add(key)
-            events.append({
-                "title": title,
-                "location": str(ev.get("LOCATION", "")).strip() or None,
-                "start": start_s,
-                "end": end_s,
-                "allDay": all_day,
-            })
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+            continue
+        stale = stale or source_stale
+        for ev in source_events:
+            # The same meeting can show up in several feeds.
+            key = (ev["title"], ev["start"], ev["end"])
+            if key not in seen:
+                seen.add(key)
+                events.append(ev)
     return {"configured": True, "events": events, "stale": stale, "errors": errors}
 
 
@@ -137,11 +173,6 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def handle_agenda(self, query):
-        if icalendar is None:
-            return self.send_json(
-                {"error": "Calendar libraries missing: pip install -r requirements.txt"},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
         try:
             start, end = parse_range(query)
         except ValueError as exc:
@@ -173,10 +204,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from other devices")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--login", action="store_true", help="sign in to Microsoft 365 and exit")
+    parser.add_argument("--logout", action="store_true", help="forget the Microsoft 365 sign-in and exit")
     args = parser.parse_args()
 
+    if args.login or args.logout:
+        ms = microsoft_calendar(load_config())
+        if ms is None:
+            sys.exit('Add a "microsoft": {"client_id": ..., "tenant": ...} section to config.json first (see README).')
+        if args.logout:
+            ms.logout()
+            print("Signed out of Microsoft 365.")
+            return
+        try:
+            ms.login()
+        except RuntimeError as exc:
+            sys.exit(f"Sign-in failed: {exc}")
+        print("Signed in. Start the server and the agenda will appear within a few minutes.")
+        return
+
     if icalendar is None:
-        print("Note: calendar libraries not installed; the agenda will be unavailable.", file=sys.stderr)
+        print("Note: icalendar not installed; ICS calendars won't load (Microsoft 365 still works).", file=sys.stderr)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Desk Companion running at http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.port}")
     try:

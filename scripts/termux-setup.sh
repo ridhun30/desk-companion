@@ -9,7 +9,7 @@ pip install -r "$REPO_DIR/requirements.txt"
 
 if [ ! -f "$REPO_DIR/config.json" ]; then
   cp "$REPO_DIR/config.example.json" "$REPO_DIR/config.json"
-  echo "Created config.json - paste your Outlook ICS link into it."
+  echo "Created config.json - set up your calendar in it (see README, step 3)."
 fi
 
 # Auto-start on boot (needs the Termux:Boot app, opened once).

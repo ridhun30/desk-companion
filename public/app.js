@@ -194,13 +194,14 @@ async function loadAgenda() {
     const data = await res.json();
     if (!data.configured) {
       agenda = null;
-      agendaStatus = 'Add your Outlook calendar link to config.json to see your agenda.';
+      agendaStatus = 'Connect your Outlook calendar in config.json to see your agenda (see README).';
     } else if (data.error) {
       throw new Error(data.error);
     } else {
       agenda = { events: data.events, fetchedAt: Date.now(), day: dayKey() };
       store.set('agenda', agenda);
-      agendaStatus = data.stale ? 'Showing last synced events (calendar unreachable).' : '';
+      agendaStatus = data.errors?.length ? data.errors.join(' · ')
+        : data.stale ? 'Showing last synced events (calendar unreachable).' : '';
     }
   } catch (err) {
     agendaStatus = agenda ? 'Offline: showing last synced events.' : `Calendar unavailable. ${err.message}`;

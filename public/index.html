@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Desk Companion</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app">
+    <!-- Time column: clock, date, weather, agenda -->
+    <section class="panel panel-time">
+      <div class="clock">
+        <span id="time">--:--</span><span id="time-suffix" class="clock-suffix"></span>
+      </div>
+      <div id="date" class="date"></div>
+      <div id="weather" class="weather muted">Loading weather…</div>
+
+      <div class="agenda">
+        <h2>Agenda</h2>
+        <div id="agenda-list" class="agenda-list"></div>
+        <p id="agenda-status" class="muted small"></p>
+      </div>
+    </section>
+
+    <!-- Pomodoro column -->
+    <section class="panel panel-pomo" id="pomo" data-phase="focus">
+      <div id="pomo-phase" class="pomo-phase">Focus</div>
+      <div class="pomo-ring">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="ring-track" cx="50" cy="50" r="45"></circle>
+          <circle class="ring-progress" id="pomo-progress" cx="50" cy="50" r="45"></circle>
+        </svg>
+        <div id="pomo-time" class="pomo-time">25:00</div>
+      </div>
+      <div id="pomo-task" class="pomo-task muted"></div>
+      <div class="pomo-controls">
+        <button id="pomo-reset" class="icon-btn" aria-label="Reset">
+          <svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+        </button>
+        <button id="pomo-toggle" class="primary-btn" aria-label="Start">
+          <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>
+        </button>
+        <button id="pomo-skip" class="icon-btn" aria-label="Skip">
+          <svg viewBox="0 0 24 24"><path d="M6 6l8.5 6L6 18zm10 0h2v12h-2z"/></svg>
+        </button>
+      </div>
+      <div id="pomo-count" class="pomo-count muted small"></div>
+    </section>
+
+    <!-- To-do column -->
+    <section class="panel panel-todo">
+      <header class="panel-header">
+        <h2>To-do</h2>
+        <span id="todo-count" class="muted small"></span>
+      </header>
+      <form id="todo-form" class="todo-form" autocomplete="off">
+        <input id="todo-input" type="text" placeholder="Add a task" enterkeyhint="done" maxlength="200">
+        <button type="submit" class="icon-btn" aria-label="Add task">
+          <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+        </button>
+      </form>
+      <ul id="todo-list" class="todo-list"></ul>
+      <p id="todo-empty" class="muted small empty">Nothing on the list. Add something above.</p>
+      <button id="todo-clear" class="link-btn" hidden>Clear completed</button>
+    </section>
+  </main>
+
+  <div class="toolbar">
+    <button id="btn-fullscreen" class="icon-btn" aria-label="Toggle fullscreen">
+      <svg viewBox="0 0 24 24"><path d="M5 5h5v2H7v3H5zm9 0h5v5h-2V7h-3zM5 14h2v3h3v2H5zm12 0h2v5h-5v-2h3z"/></svg>
+    </button>
+    <button id="btn-settings" class="icon-btn" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+    </button>
+  </div>
+
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Settings</h2>
+
+      <fieldset>
+        <legend>Clock &amp; display</legend>
+        <label class="row"><input type="checkbox" name="clock24"> 24-hour clock</label>
+        <label class="row"><input type="checkbox" name="wakeLock"> Keep screen awake</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Weather</legend>
+        <label class="row">Units
+          <select name="units">
+            <option value="celsius">°C</option>
+            <option value="fahrenheit">°F</option>
+          </select>
+        </label>
+        <div class="row">Location: <strong id="settings-location">Not set</strong></div>
+        <div class="row gap">
+          <button type="button" id="btn-geolocate" class="ghost-btn">Use my location</button>
+        </div>
+        <div class="row gap">
+          <input type="text" id="city-input" placeholder="Search a city">
+          <button type="button" id="btn-city" class="ghost-btn">Search</button>
+        </div>
+        <div id="city-results" class="city-results"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Pomodoro (minutes)</legend>
+        <div class="grid-2">
+          <label>Focus <input type="number" name="focusMin" min="1" max="180"></label>
+          <label>Short break <input type="number" name="shortMin" min="1" max="60"></label>
+          <label>Long break <input type="number" name="longMin" min="1" max="90"></label>
+          <label>Long break every <input type="number" name="longEvery" min="2" max="12"></label>
+        </div>
+        <label class="row"><input type="checkbox" name="autoStart"> Start the next session automatically</label>
+        <label class="row"><input type="checkbox" name="sound"> Chime when a session ends</label>
+      </fieldset>
+
+      <p class="muted small">The Outlook agenda is configured on the phone in <code>config.json</code>. See the README.</p>
+
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" value="save" class="solid-btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
